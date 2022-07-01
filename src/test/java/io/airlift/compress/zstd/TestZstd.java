@@ -182,4 +182,16 @@ public class TestZstd
         System.arraycopy(compressed, 0, compressedWithPadding, padding, compressedLength);
         assertEquals(ZstdDecompressor.getDecompressedSize(compressedWithPadding, padding, compressedLength), originalUncompressed.length);
     }
+
+    @Test(expectedExceptions = MalformedInputException.class, expectedExceptionsMessageRegExp = "Invalid magic prefix.*")
+    public void testVerifyMagicInAllFrames()
+            throws IOException
+    {
+        Compressor compressor = getCompressor();
+        byte[] compressed = Resources.toByteArray(getClass().getClassLoader().getResource("data/zstd/bad-second-frame.zst"));
+        byte[] uncompressed = Resources.toByteArray(getClass().getClassLoader().getResource("data/zstd/multiple-frames"));
+        byte[] output = new byte[uncompressed.length];
+        getDecompressor().decompress(compressed, 0, compressed.length, output, 0, output.length);
+        assertByteArraysEqual(uncompressed, 0, uncompressed.length, output, 0, output.length);
+    }
 }
