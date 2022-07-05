@@ -178,6 +178,7 @@ public class ZstdInputStream
         }
         ByteBuffer bb = inputBB();
         int magic = bb.getInt();
+        // skippable frame header magic
         if ((magic >= 0x184D2A50) && (magic <= 0x184D2A5F)) {
             inputPosition += SIZE_OF_INT;
             skipBytes = bb.getInt();
@@ -186,7 +187,7 @@ public class ZstdInputStream
                 if (skipBytes < inputAvailable()) {
                     inputPosition += skipBytes;
                     skipBytes = 0;
-                    // retry from start
+                    // entire frame skipped; retry from start
                     return false;
                 }
                 else {
@@ -197,6 +198,7 @@ public class ZstdInputStream
                 }
             }
         }
+        // zstd frame header magic
         if (magic == MAGIC_NUMBER) {
             int fhDesc = 0xFF & bb.get();
             int frameContentSizeFlag = (fhDesc & 0b11000000) >> 6;
@@ -305,14 +307,14 @@ public class ZstdInputStream
     {
         check(inputAddress() + curBlockSize <= inputLimit(), "Not enough input bytes");
         check(outputAddress() + curBlockSize <= outputLimit(), "Not enough output space");
-        return blockDecompressor.decodeRawBlock(inputBuffer, inputAddress(), curBlockSize, outputBuffer, outputAddress(), outputLimit());
+        return ZstdBlockDecompressor.decodeRawBlock(inputBuffer, inputAddress(), curBlockSize, outputBuffer, outputAddress(), outputLimit());
     }
 
     int decodeRle()
     {
         check(inputAddress() + 1 <= inputLimit(), "Not enough input bytes");
         check(outputAddress() + curBlockSize <= outputLimit(), "Not enough output space");
-        return blockDecompressor.decodeRleBlock(curBlockSize, inputBuffer, inputAddress(), outputBuffer, outputAddress(), outputLimit());
+        return ZstdBlockDecompressor.decodeRleBlock(curBlockSize, inputBuffer, inputAddress(), outputBuffer, outputAddress(), outputLimit());
     }
 
     int decodeCompressed()
