@@ -20,6 +20,8 @@ import java.nio.ByteOrder;
 
 import static io.airlift.compress.zstd.Constants.COMPRESSED_BLOCK;
 import static io.airlift.compress.zstd.Constants.MAGIC_NUMBER;
+import static io.airlift.compress.zstd.Constants.MAGIC_SKIPFRAME_MAX;
+import static io.airlift.compress.zstd.Constants.MAGIC_SKIPFRAME_MIN;
 import static io.airlift.compress.zstd.Constants.MAX_BLOCK_SIZE;
 import static io.airlift.compress.zstd.Constants.RAW_BLOCK;
 import static io.airlift.compress.zstd.Constants.RLE_BLOCK;
@@ -36,8 +38,10 @@ import static sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET;
 public class ZstdInputStream
         extends InputStream
 {
-    public static final int DEFAULT_BUFFER_SIZE = 8 * 1024;
-    public static final int BUFFER_SIZE_MASK = ~(DEFAULT_BUFFER_SIZE - 1);
+    private static final int DEFAULT_BUFFER_SIZE = 8 * 1024;
+    private static final int BUFFER_SIZE_MASK = ~(DEFAULT_BUFFER_SIZE - 1);
+    private static final int MAX_WINDOW_SIZE = 1 << 23;
+
     private final InputStream inputStream;
     private byte[] inputBuffer;
     private int inputPosition;
@@ -50,7 +54,7 @@ public class ZstdInputStream
     private boolean lastBlock;
     private boolean singleSegmentFlag;
     private boolean contentChecksumFlag;
-    private int skipBytes;
+    private long skipBytes;
     private int windowSize;
     private int blockMaximumSize = MAX_BLOCK_SIZE;
     private int curBlockSize;
@@ -179,10 +183,10 @@ public class ZstdInputStream
         ByteBuffer bb = inputBB();
         int magic = bb.getInt();
         // skippable frame header magic
-        if ((magic >= 0x184D2A50) && (magic <= 0x184D2A5F)) {
-            inputPosition += SIZE_OF_INT;
-            skipBytes = bb.getInt();
-            inputPosition += SIZE_OF_INT;
+        if ((magic >= MAGIC_SKIPFRAME_MIN) && (magic <= MAGIC_SKIPFRAME_MAX)) {
+            inputPosition += SIZE_OF_INT; // for magic
+            skipBytes = (bb.getInt() & 0xffff_ffffL) + SIZE_OF_INT;
+            inputPosition += SIZE_OF_INT; // for skipsize
             while (skipBytes > 0) {
                 if (skipBytes < inputAvailable()) {
                     inputPosition += skipBytes;
@@ -192,9 +196,11 @@ public class ZstdInputStream
                 }
                 else {
                     skipBytes -= inputAvailable();
-                    inputPosition = 0;
-                    inputEnd = 0;
+                    inputPosition = inputEnd;
                     readMoreInput();
+                    if (seenEof) {
+                        return false;
+                    }
                 }
             }
         }
@@ -202,9 +208,9 @@ public class ZstdInputStream
         if (magic == MAGIC_NUMBER) {
             int fhDesc = 0xFF & bb.get();
             int frameContentSizeFlag = (fhDesc & 0b11000000) >> 6;
-            singleSegmentFlag =        (fhDesc & 0b00100000) != 0;
-            contentChecksumFlag =      (fhDesc & 0b00000100) != 0;
-            int dictionaryIdFlag =     (fhDesc & 0b00000011)     ;
+            singleSegmentFlag = (fhDesc & 0b00100000) != 0;
+            contentChecksumFlag = (fhDesc & 0b00000100) != 0;
+            int dictionaryIdFlag = (fhDesc & 0b00000011);
             // 4 byte magic + 1 byte fhDesc
             int fhSize = SIZE_OF_INT + SIZE_OF_BYTE;
             // add size of frameContentSize
@@ -241,11 +247,17 @@ public class ZstdInputStream
         outputPosition = 0;
         outputEnd = 0;
         if (singleSegmentFlag) {
+            if (curHeader.contentSize > MAX_WINDOW_SIZE) {
+                throw fail(curInputFilePosition(), "Single segment too large: " + curHeader.contentSize);
+            }
             windowSize = (int) curHeader.contentSize;
             blockMaximumSize = windowSize;
             ensureOutputSpace(windowSize);
         }
         else {
+            if (curHeader.windowSize > MAX_WINDOW_SIZE) {
+                throw fail(curInputFilePosition(), "Window size too large: " + curHeader.windowSize);
+            }
             windowSize = curHeader.windowSize;
             blockMaximumSize = Math.min(windowSize, MAX_BLOCK_SIZE);
             ensureOutputSpace(blockMaximumSize + windowSize);
@@ -263,7 +275,7 @@ public class ZstdInputStream
                 return false;
             }
             int blkHeader = nextByte() | nextByte() << 8 | nextByte() << 16;
-            lastBlock =    (blkHeader & 0b001) != 0;
+            lastBlock = (blkHeader & 0b001) != 0;
             curBlockType = (blkHeader & 0b110) >> 1;
             curBlockSize = blkHeader >> 3;
             ensureInputSpace(curBlockSize + SIZE_OF_INT);
@@ -357,6 +369,7 @@ public class ZstdInputStream
             blockDecompressor = null;
             if (contentChecksumFlag) {
                 check(inputAvailable() >= SIZE_OF_INT, "missing checksum data");
+                // TODO: actually compare checksum
                 inputPosition += SIZE_OF_INT;
             }
         }
@@ -380,20 +393,18 @@ public class ZstdInputStream
     private void ensureInputSpace(int size)
     {
         if (inputSpace() < size) {
-            evictedInput += inputPosition;
             if (size < inputPosition) {
                 System.arraycopy(inputBuffer, inputPosition, inputBuffer, 0, inputAvailable());
-                inputEnd = inputAvailable();
-                inputPosition = 0;
             }
             else {
-                int newSize = (inputBuffer.length * 2 + size) & BUFFER_SIZE_MASK;
+                int newSize = (inputBuffer.length + size + DEFAULT_BUFFER_SIZE) & BUFFER_SIZE_MASK;
                 byte[] newBuf = new byte[newSize];
                 System.arraycopy(inputBuffer, inputPosition, newBuf, 0, inputAvailable());
                 inputBuffer = newBuf;
-                inputEnd = inputAvailable();
-                inputPosition = 0;
             }
+            evictedInput += inputPosition;
+            inputEnd = inputAvailable();
+            inputPosition = 0;
         }
     }
 
