@@ -178,6 +178,7 @@ public class ZstdInputStream
         }
         ByteBuffer bb = inputBB();
         int magic = bb.getInt();
+        // skippable frame header magic
         if ((magic >= 0x184D2A50) && (magic <= 0x184D2A5F)) {
             inputPosition += SIZE_OF_INT;
             skipBytes = bb.getInt();
@@ -186,7 +187,7 @@ public class ZstdInputStream
                 if (skipBytes < inputAvailable()) {
                     inputPosition += skipBytes;
                     skipBytes = 0;
-                    // retry from start
+                    // entire frame skipped; retry from start
                     return false;
                 }
                 else {
@@ -197,12 +198,13 @@ public class ZstdInputStream
                 }
             }
         }
+        // zstd frame header magic
         if (magic == MAGIC_NUMBER) {
             int fhDesc = 0xFF & bb.get();
-            int frameContentSizeFlag = (fhDesc >> 6) & 0x3;
-            singleSegmentFlag = ((fhDesc >> 5) & 0x1) != 0;
-            contentChecksumFlag = ((fhDesc >> 2) & 0x1) != 0;
-            int dictionaryIdFlag = fhDesc & 0x3;
+            int frameContentSizeFlag = (fhDesc & 0b11000000) >> 6;
+            singleSegmentFlag =        (fhDesc & 0b00100000) != 0;
+            contentChecksumFlag =      (fhDesc & 0b00000100) != 0;
+            int dictionaryIdFlag =     (fhDesc & 0b00000011)     ;
             // 4 byte magic + 1 byte fhDesc
             int fhSize = SIZE_OF_INT + SIZE_OF_BYTE;
             // add size of frameContentSize
@@ -260,12 +262,10 @@ public class ZstdInputStream
                 // retry from start
                 return false;
             }
-            int blkB1 = nextByte();
-            int blkB2 = nextByte();
-            int blkB3 = nextByte();
-            lastBlock = ((blkB1 & 1) != 0);
-            curBlockType = (blkB1 >> 1) & 0x3;
-            curBlockSize = (blkB1 >> 3) | (blkB2 << 5) | (blkB3 << 13);
+            int blkHeader = nextByte() | nextByte() << 8 | nextByte() << 16;
+            lastBlock =    (blkHeader & 0b001) != 0;
+            curBlockType = (blkHeader & 0b110) >> 1;
+            curBlockSize = blkHeader >> 3;
             ensureInputSpace(curBlockSize + SIZE_OF_INT);
         }
         if (inputAvailable() < curBlockSize + (contentChecksumFlag ? SIZE_OF_INT : 0)) {
@@ -307,14 +307,14 @@ public class ZstdInputStream
     {
         check(inputAddress() + curBlockSize <= inputLimit(), "Not enough input bytes");
         check(outputAddress() + curBlockSize <= outputLimit(), "Not enough output space");
-        return blockDecompressor.decodeRawBlock(inputBuffer, inputAddress(), curBlockSize, outputBuffer, outputAddress(), outputLimit());
+        return ZstdBlockDecompressor.decodeRawBlock(inputBuffer, inputAddress(), curBlockSize, outputBuffer, outputAddress(), outputLimit());
     }
 
     int decodeRle()
     {
         check(inputAddress() + 1 <= inputLimit(), "Not enough input bytes");
         check(outputAddress() + curBlockSize <= outputLimit(), "Not enough output space");
-        return blockDecompressor.decodeRleBlock(curBlockSize, inputBuffer, inputAddress(), outputBuffer, outputAddress(), outputLimit());
+        return ZstdBlockDecompressor.decodeRleBlock(curBlockSize, inputBuffer, inputAddress(), outputBuffer, outputAddress(), outputLimit());
     }
 
     int decodeCompressed()
@@ -411,34 +411,24 @@ public class ZstdInputStream
     {
         if (outputSpace() < size) {
             check(outputAvailable() == 0, "logic error");
+            byte[] newBuf;
             if (windowSize * 4 + size < outputPosition) {
                 // plenty space in old buffer
-                int movePos = outputPosition - windowSize;
-                int moveLen = outputEnd - movePos;
-                System.arraycopy(outputBuffer, movePos, outputBuffer, 0, moveLen);
-                outputEnd -= movePos;
-                outputPosition -= movePos;
+                newBuf = outputBuffer;
             }
             else {
                 int newSize = (outputBuffer.length
                                + windowSize * 4
                                + size
                                + DEFAULT_BUFFER_SIZE) & BUFFER_SIZE_MASK;
-                byte[] newBuf = new byte[newSize];
-                if (outputPosition < windowSize) {
-                    // full copy, no relative move
-                    System.arraycopy(outputBuffer, 0, newBuf, 0, outputEnd);
-                }
-                else {
-                    // skip old data up to windowsize
-                    int movePos = outputPosition - windowSize;
-                    int moveLen = outputEnd - movePos;
-                    System.arraycopy(outputBuffer, movePos, newBuf, 0, moveLen);
-                    outputEnd -= movePos;
-                    outputPosition -= movePos;
-                }
-                outputBuffer = newBuf;
+                newBuf = new byte[newSize];
             }
+            // keep up to one window of old data
+            int sizeToKeep = Math.min(outputPosition, windowSize);
+            System.arraycopy(outputBuffer, outputPosition - sizeToKeep, newBuf, 0, sizeToKeep);
+            outputBuffer = newBuf;
+            outputEnd = sizeToKeep;
+            outputPosition = sizeToKeep;
         }
     }
 
