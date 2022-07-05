@@ -426,6 +426,7 @@ public class ZstdInputStream
             // keep up to one window of old data
             int sizeToKeep = Math.min(outputPosition, windowSize);
             System.arraycopy(outputBuffer, outputPosition - sizeToKeep, newBuf, 0, sizeToKeep);
+            outputBuffer = newBuf;
             outputEnd = sizeToKeep;
             outputPosition = sizeToKeep;
         }
