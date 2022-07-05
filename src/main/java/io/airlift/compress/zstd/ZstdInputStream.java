@@ -411,34 +411,23 @@ public class ZstdInputStream
     {
         if (outputSpace() < size) {
             check(outputAvailable() == 0, "logic error");
+            byte[] newBuf;
             if (windowSize * 4 + size < outputPosition) {
                 // plenty space in old buffer
-                int movePos = outputPosition - windowSize;
-                int moveLen = outputEnd - movePos;
-                System.arraycopy(outputBuffer, movePos, outputBuffer, 0, moveLen);
-                outputEnd -= movePos;
-                outputPosition -= movePos;
+                newBuf = outputBuffer;
             }
             else {
                 int newSize = (outputBuffer.length
                                + windowSize * 4
                                + size
                                + DEFAULT_BUFFER_SIZE) & BUFFER_SIZE_MASK;
-                byte[] newBuf = new byte[newSize];
-                if (outputPosition < windowSize) {
-                    // full copy, no relative move
-                    System.arraycopy(outputBuffer, 0, newBuf, 0, outputEnd);
-                }
-                else {
-                    // skip old data up to windowsize
-                    int movePos = outputPosition - windowSize;
-                    int moveLen = outputEnd - movePos;
-                    System.arraycopy(outputBuffer, movePos, newBuf, 0, moveLen);
-                    outputEnd -= movePos;
-                    outputPosition -= movePos;
-                }
-                outputBuffer = newBuf;
+                newBuf = new byte[newSize];
             }
+            // keep up to one window of old data
+            int sizeToKeep = Math.min(outputPosition, windowSize);
+            System.arraycopy(outputBuffer, outputPosition - sizeToKeep, newBuf, 0, sizeToKeep);
+            outputEnd = sizeToKeep;
+            outputPosition = sizeToKeep;
         }
     }
 
