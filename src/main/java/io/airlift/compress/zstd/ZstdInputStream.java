@@ -260,12 +260,10 @@ public class ZstdInputStream
                 // retry from start
                 return false;
             }
-            int blkB1 = nextByte();
-            int blkB2 = nextByte();
-            int blkB3 = nextByte();
-            lastBlock = ((blkB1 & 1) != 0);
-            curBlockType = (blkB1 >> 1) & 0x3;
-            curBlockSize = (blkB1 >> 3) | (blkB2 << 5) | (blkB3 << 13);
+            int blkHeader = nextByte() << 16 | nextByte() << 8 | nextByte();
+            lastBlock =    (blkHeader & 0b001) != 0;
+            curBlockType = (blkHeader & 0b110) >> 1;
+            curBlockSize = blkHeader >> 3;
             ensureInputSpace(curBlockSize + SIZE_OF_INT);
         }
         if (inputAvailable() < curBlockSize + (contentChecksumFlag ? SIZE_OF_INT : 0)) {
