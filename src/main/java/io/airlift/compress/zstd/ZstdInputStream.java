@@ -262,7 +262,7 @@ public class ZstdInputStream
                 // retry from start
                 return false;
             }
-            int blkHeader = nextByte() << 16 | nextByte() << 8 | nextByte();
+            int blkHeader = nextByte() | nextByte() << 8 | nextByte() << 16;
             lastBlock =    (blkHeader & 0b001) != 0;
             curBlockType = (blkHeader & 0b110) >> 1;
             curBlockSize = blkHeader >> 3;
