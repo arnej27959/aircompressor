@@ -199,10 +199,10 @@ public class ZstdInputStream
         }
         if (magic == MAGIC_NUMBER) {
             int fhDesc = 0xFF & bb.get();
-            int frameContentSizeFlag = (fhDesc >> 6) & 0x3;
-            singleSegmentFlag = ((fhDesc >> 5) & 0x1) != 0;
-            contentChecksumFlag = ((fhDesc >> 2) & 0x1) != 0;
-            int dictionaryIdFlag = fhDesc & 0x3;
+            int frameContentSizeFlag = (fhDesc & 0b11000000) >> 6;
+            singleSegmentFlag =        (fhDesc & 0b00100000) != 0;
+            contentChecksumFlag =      (fhDesc & 0b00000100) != 0;
+            int dictionaryIdFlag =     (fhDesc & 0b00000011)     ;
             // 4 byte magic + 1 byte fhDesc
             int fhSize = SIZE_OF_INT + SIZE_OF_BYTE;
             // add size of frameContentSize
